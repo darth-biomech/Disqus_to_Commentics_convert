@@ -16,71 +16,119 @@ namespace DB_Disqus_convert
         public Form1()
         {
             InitializeComponent();
+            ConsoleScreen.Text = "";
+            progressBar.Value = 0;
             buttonStart.Enabled = false;
             Program.thisProgram.gui = this;
-            numericUpDown1.Value = Program.thisProgram.siteID;
-            CommentFilePath.Text = Program.thisProgram.commentFile;
-            PageFilePath.Text = Program.thisProgram.pagefile;
+            DisqusSourceFilePath.Text = Program.thisProgram.inputFile;
+            CommentPageLookupFilePath.Text = Program.thisProgram.pagesLookupFile;
+            checkBoxDeleteComments.Checked = Program.thisProgram.skipDeletedPosts;
+            inputNumOfUsers.Value = Program.thisProgram.numOfUsers;
+            inputNumberOfComments.Value = Program.thisProgram.numOfComments;
+            inputDefaultEmail.Text = Program.thisProgram.defaultEmail;
+            TryEnableStartButton();
+            Log("--------------------------------------------------------------------------",false);
+            Log("--------------------------------------------------------------------------",false);
+            Log("---------DO NOT FORGET TO MAKE FULL BACKUPS BEFORE DOING ANYTHING---------",false);
+            Log("--------------------------------------------------------------------------",false);
+            Log("--------------------------------------------------------------------------");
+            Log("Ready to start converting.");
         }
 
-        public void Log(string text)
+        private void TryEnableStartButton()
+        {
+            if (DisqusSourceFilePath.Text.Contains(".txt") || DisqusSourceFilePath.Text.Contains(".xml"))
+            {
+                if (CommentPageLookupFilePath.Text.Contains(".txt") || CommentPageLookupFilePath.Text.Contains(".sql"))
+                {
+                    buttonStart.Enabled = true;
+                }
+            }
+        }
+
+
+        private void deleteComments_CheckedChanged(object sender, EventArgs e)
+        {
+            Program.thisProgram.skipDeletedPosts = checkBoxDeleteComments.Checked;
+        }
+
+        private void inputNumOfUsers_ValueChanged(object sender, EventArgs e)
+        {
+            Program.thisProgram.numOfUsers = (int)Math.Round(inputNumOfUsers.Value);
+        }
+
+        private void inputNumberOfComments_ValueChanged(object sender, EventArgs e)
+        {
+            Program.thisProgram.numOfComments = (int)Math.Round(inputNumberOfComments.Value);
+        }
+
+        private void inputDefaultEmail_TextChanged(object sender, EventArgs e)
+        {
+            Program.thisProgram.defaultEmail = inputDefaultEmail.Text;
+        }
+        public string GetLog()=>ConsoleScreen.Text;
+        public void Log(string text, bool newline = true)
         {
             ConsoleScreen.AppendText(text);
             ConsoleScreen.AppendText(Environment.NewLine);
+            if(newline)
+                ConsoleScreen.AppendText(Environment.NewLine);
         }
         private void SourceXMLPath_TextChanged(object sender, EventArgs e)
         {
-            if (CommentFilePath.Text == "" || CommentFilePath.Text == @"C:\")
-            {
-              //  CommentFilePath.Text = PageFilePath.Text;
-            }
+            if (!DisqusSourceFilePath.Text.Contains(".txt") && !DisqusSourceFilePath.Text.Contains(".xml"))
+                return;
+            Program.SetInputFile(DisqusSourceFilePath.Text);
         }
-
-        private void selectButton_Click(object sender, EventArgs e)
+        private void buttonClickLoadDisqusXML(object sender, EventArgs e)
         {
-            openXMLdialog.Filter = @"txt files (*.txt)|*.txt";
+            openXMLdialog.Filter = @"discus backup (*.xml)|*.xml|discus dump (*.txt)|*.txt";
             openXMLdialog.FilterIndex = 1;
             openXMLdialog.RestoreDirectory = true;
-            if (PageFilePath.Text != string.Empty)
+            if (DisqusSourceFilePath.Text != string.Empty)
             {
-                openXMLdialog.InitialDirectory = PageFilePath.Text;
+                openXMLdialog.InitialDirectory = DisqusSourceFilePath.Text;
             }
             else
             {
-                openXMLdialog.InitialDirectory = @"c:\";
+                openXMLdialog.InitialDirectory = Application.StartupPath;
             }
             if (openXMLdialog.ShowDialog() == DialogResult.OK)
             {
                 //Get the path of specified file
-                PageFilePath.Text = openXMLdialog.FileName;
+                DisqusSourceFilePath.Text = openXMLdialog.FileName;
+                Program.SetInputFile(DisqusSourceFilePath.Text);
                 
-                Program.LoadPageFile(PageFilePath.Text);
-                buttonStart.Enabled = true;
-                Log("Selected Page file.");
+                TryEnableStartButton();
+                Log("Selected Disqus backup file.");
             }
         }
 
-        private void buttonOutput_Click(object sender, EventArgs e)
+        private void PageLookupFilePath_TextChanged(object sender, EventArgs e)
         {
-            openXMLdialog.Filter = @"txt files (*.txt)|*.txt";
+            if (!CommentPageLookupFilePath.Text.Contains(".txt") && !CommentPageLookupFilePath.Text.Contains(".sql"))
+                return;
+            Program.SetOutputFile(CommentPageLookupFilePath.Text);
+        }
+        private void buttonClickLoadPagesSQLFile(object sender, EventArgs e)
+        {
+            openXMLdialog.Filter = @"mysql file (*.sql)|*.sql|(*.txt)|*.txt";
             openXMLdialog.FilterIndex = 1;
             openXMLdialog.RestoreDirectory = true;
-            if (CommentFilePath.Text != string.Empty)
+            if (CommentPageLookupFilePath.Text != string.Empty)
             {
-                openXMLdialog.InitialDirectory = CommentFilePath.Text;
+                openXMLdialog.InitialDirectory = CommentPageLookupFilePath.Text;
             }
             else
             {
-                openXMLdialog.InitialDirectory = @"c:\";
+                openXMLdialog.InitialDirectory = Application.StartupPath;
             }
             if (openXMLdialog.ShowDialog() == DialogResult.OK)
             {
-                //Get the path of specified file
-                CommentFilePath.Text = openXMLdialog.FileName;
-                
-                Program.LoadCommentFile(CommentFilePath.Text);
-                buttonStart.Enabled = true;
-                Log("Selected Comment File.");
+                CommentPageLookupFilePath.Text = openXMLdialog.FileName;
+                Program.SetOutputFile(CommentPageLookupFilePath.Text);
+                TryEnableStartButton();
+                Log("Selected Commentics Page SQL File.");
             }
         }
 
@@ -89,15 +137,10 @@ namespace DB_Disqus_convert
             Program.thisProgram.SaveSettings();
             Program.Begin();
         }
-
-        private void numericUpDown1_ValueChanged(object sender, EventArgs e)
-        {
-            Program.thisProgram.siteID = (int) numericUpDown1.Value;
-        }
-
         private void Form1_FormClosing(object sender, FormClosingEventArgs e)
         {
             Program.thisProgram.SaveSettings();
         }
+
     }
 }

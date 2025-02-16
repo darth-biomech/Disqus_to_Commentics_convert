@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Xml;
 using System.Text;
+using System.Windows.Forms.VisualStyles;
 using System.Xml.Linq;
 using System.Xml.Serialization;
 
@@ -27,14 +28,14 @@ namespace DB_Disqus_convert
             Application.Run(new Form1());
         }
 
-        public static void LoadPageFile(string file)
+        public static void SetInputFile(string file)
         {
-            thisProgram.pagefile = file;
+            thisProgram.inputFile = file;
         }
 
-        public static void LoadCommentFile(string file)
+        public static void SetOutputFile(string file)
         {
-            thisProgram.commentFile = file;
+            thisProgram.pagesLookupFile = file;
         }
 
         public static void Begin()
@@ -88,60 +89,36 @@ namespace DB_Disqus_convert
         }
         
         public Form1 gui;
-        public string pagefile;
-        public string commentFile;
+        public string inputFile;
+        public string pagesLookupFile;
+        public string defaultEmail = "noreply@yoursite.com";
+        public int numOfComments = 0;
+        public int numOfUsers = 1;
+        public bool skipDeletedPosts = false;
+
         
-        public int siteID;
-        string defaultEmail = "noreply@leavingthecradle.com";
-        string siteName = "leavingthecradle";
-        string threadIdentifierPart = "000";
-        public Dictionary<string, int> bookIDDetectors = new Dictionary<string, int>()
-        {
-            {"comic",2},
-            {"blog",1},
-            {"extra_chapter",3}
-        };
 
         
         public void SaveSettings()
         {
-            _settingsIni.Write("pageFile", pagefile, "TransferSettings");
-            _settingsIni.Write("commentFile", commentFile, "TransferSettings");
-            _settingsIni.Write("siteID", siteID.ToString(), "TransferSettings");
+            _settingsIni.Write("inputFile", inputFile, "TransferSettings");
+            _settingsIni.Write("outputFile", pagesLookupFile, "TransferSettings");
             _settingsIni.Write("defaultEmail", defaultEmail, "TransferSettings");
-            _settingsIni.Write("siteName", siteName, "TransferSettings");
-            _settingsIni.Write("threadIDPart", threadIdentifierPart, "TransferSettings");
-            string bookDetectors="";
-            foreach (KeyValuePair<string,int> pair in bookIDDetectors)
-            {
-                bookDetectors += pair.Key + ","+ pair.Value+ ";";
-            }
-            _settingsIni.Write("bookDetectors", bookDetectors, "TransferSettings");
+            _settingsIni.Write("numOfComments", numOfComments.ToString(), "TransferSettings");
+            _settingsIni.Write("numOfUsers", numOfUsers.ToString(), "TransferSettings");
+            _settingsIni.Write("skipDeletedPosts", skipDeletedPosts.ToString(), "TransferSettings");
+            
         }
         public void LoadSettings()
         {
-            if (pagefile == String.Empty)
-                pagefile = Application.StartupPath;
-            TryGetSettingValue("pageFile", ref pagefile);
-            TryGetSettingValue("commentFile", ref commentFile);
-            TryGetSettingValue("siteID", ref siteID);
+            if (inputFile == String.Empty)
+                inputFile = Application.StartupPath;
+            TryGetSettingValue("inputFile", ref inputFile);
+            TryGetSettingValue("outputFile", ref pagesLookupFile);
             TryGetSettingValue("defaultEmail", ref defaultEmail);
-            TryGetSettingValue("siteName", ref siteName);
-            string bookDetectors ="";
-           
-            TryGetSettingValue("threadIDPart", ref bookDetectors);
-            if(bookDetectors !="" && bookDetectors.Contains(';') && bookDetectors.Contains(','))
-            {
-                string[] detectors = bookDetectors.Split(';');
-                bookIDDetectors.Clear();
-                foreach (string s in detectors)
-                {
-                    string[] parts = s.Split(',');
-                    int id = 0;
-                    if (int.TryParse(parts[1], out int bookID))id=bookID;
-                    bookIDDetectors.Add(parts[0], id);
-                }
-            }
+            TryGetSettingValue("numOfComments", ref numOfComments);
+            TryGetSettingValue("numOfUsers", ref numOfUsers);
+            TryGetSettingValue("skipDeletedPosts", ref skipDeletedPosts);
         }
  
         private void TryGetSettingValue(string key, ref int var)
@@ -177,279 +154,337 @@ namespace DB_Disqus_convert
                 var = _settingsIni.Read(key, "TransferSettings");
             }
         }
-        public List<String> pageThreads = new List<string>();
-        public Dictionary<string, int> threadmapper = new Dictionary<string, int>(); // discus ID vs grawlix ID
         
-        public List<String> usersList = new List<string>();
-        public Dictionary<string, int> usersMap = new Dictionary<string, int>(); // discus name vs grawlix ID
+        public Dictionary<string, int> threadMap = new Dictionary<string, int>(); // discus ID vs commentics ID
+        public Dictionary<string, int> usersMap = new Dictionary<string, int>(); // discus name vs commentics ID
+        public Dictionary<string, int> commentsMap = new Dictionary<string, int>(); // discus ID vs commentics ID
+
+        public List<CommenticsPageEntry> pageDb = new List<CommenticsPageEntry>();
         
-        public List<String> commentsList = new List<string>();
-        public Dictionary<string, int> commentsMap = new Dictionary<string, int>(); // discus ID vs grawlix ID
+        DiDB disqusDB;
 
-        public List<Comment> formattedComments = new List<Comment>();
-
-        public List<CommentThread> commentThreads = new List<CommentThread>();
-        public List<PageDB> pageDb = new List<PageDB>();
+        private int steps = 6;
+        private int currentStep = 0;
+        public void IncrementProgress()
+        {
+            currentStep++;
+            gui.progressBar.Value = (int) Math.Round(((float) currentStep / steps) * 100);
+        }
         public void Start()
         {
-            if (pagefile != String.Empty && commentFile != String.Empty)
+            gui.progressBar.Value = 0;
+            currentStep = 0;
+            if (StartProcessing())
+            {
+                gui.Log("--------------------------------------------------");
+                gui.Log(" ");
+                gui.Log("Conversion finished!");
+            }
+            else
+            {
+                gui.Log("--------------------------------------------------");
+                gui.Log(" ");
+                gui.Log("Conversion had errors!");
+            }
+            ExportFileString("ConversionLog",gui.GetLog(), ".log");
+        }
+        public bool StartProcessing()
+        {
+            if (inputFile != String.Empty && pagesLookupFile != String.Empty)
             {
                 gui.Log("Starting conversion...");
 
-                string pagesData = File.ReadAllText(pagefile);
-                string commentsData = File.ReadAllText(commentFile);
-                string[] allPages = pagesData.Split('\n');
-                string[] allComments = commentsData.Split('\n');
-
-                string outThreads = "INSERT INTO `pages` (`id`, `site_id`, `identifier`, `reference`, `url`, `moderate`, `is_form_enabled`, `date_modified`, `date_added`) VALUES\n";
+                threadMap.Clear();
+                usersMap.Clear();
+                commentsMap.Clear();
+                pageDb.Clear();
+                disqusDB = null;
                 
-                commentThreads = new List<CommentThread>();
-                pageDb = new List<PageDB>();
-                
-                for (int i = 1; i < allPages.Length; i++)
+                if (File.Exists(inputFile))
                 {
-                    PageDB pagesDB = ParseBook(allPages[i]);
-                    pageDb.Add(pagesDB);
-                }
-                for (int i = 1; i < allComments.Length; i++)
-                {
-                    CommentThread commentDB = ParseComments(allComments[i]);
-                    commentThreads.Add(commentDB);
-                }
-
-                for (int i = 0; i < commentThreads.Count; i++)
-                {
-                    CommentThread com = commentThreads[i];
-                    string refer = com.reference;
-                    string p_ID = "-1";
-                    for (int j = 0; j < pageDb.Count; j++)
+                    disqusDB = DiDB.Create(File.ReadAllText(inputFile));
+                    if(disqusDB == null)
                     {
-                        string pageTitle = pageDb[j].Title;
-                        //gui.Log(pageTitle.ToLower()+" == "+refer.ToLower());
-                        if (pageTitle.ToLower() == refer.ToLower())
+                        gui.Log("Couldn't create DB");
+                        return false;
+                    }
+                    gui.Log("Disqus backup parsed!");
+                    gui.Log("Got "+disqusDB.categories.Count+" categories");
+                    gui.Log("Got "+disqusDB.users.Count+" users");
+                    gui.Log("Got "+disqusDB.threads.Count+" threads");
+                    gui.Log("Got "+disqusDB.posts.Count+" posts");
+                    IncrementProgress();
+                }
+                else
+                {
+                    gui.Log("Disqus backup file not found!");
+                    return false;
+                }
+                
+                if (File.Exists(pagesLookupFile))
+                {
+                    gui.Log("Reading pages lookup file...");
+                    string pagesData = File.ReadAllText(pagesLookupFile);
+                    if (pagesData.IndexOf("CREATE TABLE "+"`pages`", StringComparison.Ordinal) == -1)
+                    {
+                        gui.Log("Pages lookup file is not an SQL backup!");
+                        return false;
+                    }
+                    List<string> allPages = new();
+                    string[] allInserts = pagesData.Split(new []{"INSERT INTO `pages`"}, StringSplitOptions.RemoveEmptyEntries);
+                    for (int index = 0; index < allInserts.Length; index++)
+                    {
+                        string s = allInserts[index];
+                        if(s.IndexOf("VALUES", StringComparison.Ordinal) == -1) continue;
+                        allInserts[index] = s.Substring(s.IndexOf("VALUES", StringComparison.Ordinal)).Split(new []{"'');"},StringSplitOptions.None)[0]+"'')";
+                        allPages.AddRange(allInserts[index].Split(Convert.ToChar('\n')));
+                    }
+
+                    pageDb.Clear();
+                    int succPages = 0;
+                    for (int i = 1; i < allPages.Count; i++)
+                    {
+                        if(CommenticsPageEntry.TryCreateEntry(allPages[i].Trim().TrimStart('(').TrimEnd(',').TrimEnd(')'),out CommenticsPageEntry entry))
                         {
-                            p_ID = pageDb[j].Id;
-                            break;
+                            pageDb.Add(entry);
+                            succPages++;
                         }
                     }
-                    com.identifier = p_ID;
-
-                    string fin = "(" + com.id.ToString() + ", "
-                                 + com.siteId.ToString() + ", \'"
-                                 + com.identifier + "\', \'"
-                                 + com.reference + "\', \'"
-                                 + com.url + "\', \'"
-                                 + com.moderate + "\', 1, \'"
-                                 + com.DateModified + "\', \'"
-                                 + com.DateCreated + "\'),\n";
-                    outThreads += fin;
+                    gui.Log("Read "+pageDb.Count+" pages");
+                    if(pageDb.Count > succPages)
+                        gui.Log("Failed to parse "+(pageDb.Count-succPages)+" pages");
+                    IncrementProgress();
+                }
+                else
+                {
+                    gui.Log("Pages lookup file not found!");
+                    return false;
                 }
                 
-                ExportFileString("Comments_New",outThreads);
-                
-                gui.Log("Parsing finished! Paste results into sql backups and pray...");
-            }
-        }
-
-        private PageDB ParseBook(string bookString)
-        {
-            bookString = bookString.Substring(1, bookString.Length - 2);
-            
-            string[] parts = bookString.Split(',');
-            for (int i = 0; i < parts.Length; i++)
-            {
-                parts[i] = parts[i].Replace('\'', ' ').Trim();
-            }
-            PageDB book = new PageDB();
-            book.Id = parts[0].Trim();
-            book.Title = parts[1].Trim();
-            book.BookId = parts[2].Trim();
-            book.MarkerId = parts[3].Trim();
-            book.ToneId = parts[4].Trim();
-            book.SortOrder = parts[5].Trim();
-            book.DateCreated = parts[6].Trim();
-            book.DateModified = parts[7].Trim();
-            book.DatePublish = parts[8].Trim();
-            book.Options = parts[9].Trim();
-            book.Description = parts[10].Trim();
-            return book;
-        }
-        private CommentThread ParseComments(string commentString)
-        {
-            commentString = commentString.Substring(1, commentString.Length - 3);
-            
-            string[] parts = commentString.Split(',');
-            for (int i = 0; i < parts.Length; i++)
-            {
-                parts[i] = parts[i].Replace('\'', ' ').Trim();
-            }
-            CommentThread comments = new CommentThread();
-            comments.id = int.Parse(parts[0].Trim());
-            comments.siteId = int.Parse(parts[1].Trim());
-            comments.identifier = parts[2].Trim();
-            comments.reference = parts[3].Trim();
-            comments.url = parts[4].Trim();
-            comments.moderate = parts[5].Trim();
-            comments.isFormEnabled = parts[6].Trim();
-            comments.DateModified = parts[7].Trim();
-            comments.DateCreated = parts[8].Trim();
-            return comments;
-        }
-        
-        private void CreateUsers(XmlNodeList posts)
-        {
-            Dictionary<string, string> tokenmap = new Dictionary<string, string>();
-            foreach (XmlNode thread in posts)
-            {
-             //   var iD = thread.Attributes["dsq:id"].Value;
-                var author = thread["author"];
-                if (author != null)
+                if (pageDb.Count > 0 && disqusDB.threads.Count > 0)
                 {
-                    string name = author["name"].InnerText;
-                    if (!tokenmap.ContainsKey(name) && thread["isDeleted"].InnerText == "false" && thread["isDeleted"].InnerText == "false") 
+                    List<string> orphanURLs = new();
+                    foreach (DiThread diThread in disqusDB.threads)
                     {
-                        tokenmap.Add(name, Guid.NewGuid().ToString());
-                    }
-                }
-            }
-            usersList.Clear();
-            usersMap.Clear();
-            int userID = 1;
-            foreach (var token in tokenmap)
-            {
-                
-                string item = "("+userID+", 0, 0, '', '', '"+token.Key+"', '"+defaultEmail+"', 'default', '"+token.Value+"', 1, 1, 1, 1, 'html', '127.0.0.1', '2022-11-01 06:41:14', '2022-11-01 06:41:14'),";
-                usersList.Add(item);
-                usersMap.Add(token.Key,userID);
-                gui.Log(item);
-                userID += 1;
-            }
-            usersMap.Add("anon",userID);
-        }
-        private void MapPosts(XmlNodeList posts)
-        {
-            formattedComments.Clear();
-            commentsMap.Clear();
-            commentsList.Clear();
-            int cmntID = 0;
-            foreach (XmlNode thread in posts)
-            {
-                //   var iD = thread.Attributes["dsq:id"].Value;
-                var author = thread["author"];
-                string name = "anon";
-                if (author != null)
-                    name = author["name"].InnerText;
-                string message = thread["message"].InnerText;
-                message = message.Replace("<![CDATA[", "");
-                message = message.Replace("]]>", "");
-                string date = thread["createdAt"].InnerText;
-                int userID = -1;
-                if (usersMap.ContainsKey(name))
-                    userID = usersMap[name];
-                int pageID = -1;
-                var thrID = thread["thread"];
-                var thrParent = thread["parent"];
-                string parentID = "none";
-                if (thrParent != null)
-                {
-                    parentID = thrParent.Attributes["dsq:id"].Value;
-                }
-                bool used = false;
-                if (thrID != null)
-                {
-                    if (threadmapper.ContainsKey(thrID.Attributes["dsq:id"].Value))
-                        pageID = threadmapper[thrID.Attributes["dsq:id"].Value];
-                }
-
-                if (thread["isDeleted"].InnerText == "false" && thread["isSpam"].InnerText == "false" && pageID > 0)
-                {
-                    message = message.Replace("'", "&#39;");
-                    message = message.Replace("`", "&#96;");
-                    cmntID += 1;
-                    Comment newComment = new Comment();
-                    newComment.authorID = userID;
-                    newComment.date = FDate(date);
-                    newComment.id = cmntID;
-                    newComment.pageId = pageID;
-                    newComment.text = message;
-                    newComment.commentID = thread.Attributes["dsq:id"].Value;
-                    newComment.parentID = parentID;
-                    formattedComments.Add(newComment);
-                    commentsMap.Add(thread.Attributes["dsq:id"].Value,cmntID);
-                }
-            }
-
-            foreach (Comment comment in formattedComments)
-            {
-                int replyto = 0;
-                if (comment.parentID != "none")
-                    replyto = commentsMap[comment.parentID];
-                                            //`id`,          `user_id`,      `page_id`, `website`, `town`, `state_id`, `country_id`, `rating`, `reply_to`, `headline`, `comment`, `reply`, `ip_address`, `is_approved`, `notes`, `is_admin`, `is_sent`, `sent_to`, `likes`, `dislikes`, `reports`, `is_sticky`, `is_locked`, `is_verified`, `date_modified`, `date_added`
-                string thecomment = "(" + comment.id + ", " + comment.authorID + ", " + comment.pageId + ", '', '', 0, 0, 0, " + replyto + ", '', '" + comment.text + "', '', '127.0.0.1', 1, 'transfered from Disqus', 0, 1, 0, 0, 0, 0, 0, 0, 1, '" + comment.date + "', '" + comment.date + "'),";
-                commentsList.Add(thecomment);
-                gui.Log(thecomment);
-            }
-        }
-
-
-        private void MapThreads(XmlNodeList threads)
-        {
-            threadmapper.Clear();
-            pageThreads.Clear();
-                int threadcount = 1;
-                foreach (XmlNode thread in threads)
-                {
-                    var iD = thread.Attributes["dsq:id"].Value;
-                    var link = thread["link"];
-                    if (iD != null && link != null)
-                    {
-                        string[] linkelem = link.InnerText.Split('/');
-                        if (linkelem.Length != 0)
+                        bool found = false;
+                        foreach (CommenticsPageEntry pageEntry in pageDb)
                         {
-                            if (linkelem[2].Contains(siteName))
-                            {
-                                if (linkelem.Length >= 5)
+                            if(!threadMap.ContainsKey(diThread.threadId))
+                                if (diThread.link == pageEntry.url)
                                 {
-                                    string pageID = "0";
-
-                                    foreach (KeyValuePair<string,int> pair in bookIDDetectors)
-                                    {
-                                        if (linkelem[3].ToLower() == pair.Key.ToLower())pageID = pair.Value.ToString();
-                                        break;
-                                    }
-                                    int identifier = 0;
-                                    try
-                                    {
-                                        identifier = Int32.Parse(pageID + threadIdentifierPart + linkelem[4]);
-                                    }
-                                    catch
-                                    {
-                                        identifier = 90000 + threadcount;
-                                    }
-
-                                    // gui.Log(iD + "  -  " + linkelem[3] + "/" + linkelem[4]);
-                                                    //`id`,             `site_id`, `identifier`,    `reference`,          `url`,      `moderate`, `is_form_enabled`, `date_modified`,          `date_added`
-                                    string item =   "("+threadcount+",  "+
-                                                    siteID+", '"+
-                                                    identifier+"', '"+
-                                                    linkelem[4]+"' , '"+
-                                                    link.InnerText+
-                                                    "' , 'default', 1, '"+
-                                                    FDate(thread["createdAt"].InnerText)+"', '"+
-                                                    FDate(thread["createdAt"].InnerText)+"'),";
-                                    pageThreads.Add(item);
-                                    gui.Log(item);
-                                    threadmapper.Add(iD,threadcount);
-                                    threadcount += 1;
+                                    threadMap.Add(diThread.threadId, int.Parse(pageEntry.identifier));
+                                    found = true;
+                                    break;
                                 }
-                            }
                         }
+                        if(!found)
+                            orphanURLs.Add(diThread.link);
                     }
+                    if(orphanURLs.Count > 0)
+                    {
+                        gui.Log("Couldn't find "+orphanURLs.Count+" URLs in pages lookup file:",false);
+                        foreach (string orphanUrl in orphanURLs)
+                        {
+                            if(orphanUrl != null)
+                                gui.Log("\t"+orphanUrl,false);
+                        }
+                        gui.Log("",false);
+                        gui.Log("Try to visit every page on your site that has Commentics form so that it would " + Environment.NewLine +
+                                "add those URL entries in its database, re-Export Pages table SQL backup, and try again");
+                    }
+                    else
+                    {
+                        gui.Log("All URLs were located!");
+                    }
+                    IncrementProgress();
                 }
+
+                for (int i = 0; i < disqusDB.posts.Count; i++)
+                    if (disqusDB.posts[i].commentId != null && disqusDB.posts[i].commentId != "")
+                        commentsMap.Add(disqusDB.posts[i].commentId, i);
+                for (int i = 0; i < disqusDB.users.Count; i++)
+                    if (disqusDB.users[i].username != null && disqusDB.users[i].username != "")
+                        usersMap.Add(disqusDB.users[i].username, i);
+                IncrementProgress();
+
+                List<string> outUsers = new();
+                
+                int countLines = 0;
+                for (int i = 0; i < disqusDB.users.Count; i++)
+                {
+                    countLines++;
+                    if(countLines > DiDB.tablelineSeparator)
+                    {
+                        countLines = 0;
+                        outUsers[outUsers.Count-1] = outUsers[outUsers.Count-1].TrimEnd().TrimEnd(',', ' ')+";";
+                        outUsers.Add(DiDB.insertUsersTableLine);
+                    }
+                    DiAuthor user = disqusDB.users[i];
+                    outUsers.Add(user.FormatEntry(i+numOfUsers, defaultEmail, i == disqusDB.users.Count - 1));
+                }
+                string finUserFile = DiDB.startOfUsersFile + DiDB.insertUsersTableLine;
+                foreach (string user in outUsers)
+                {
+                    finUserFile += user;
+                }
+                finUserFile += DiDB.endOfUsersFile;
+                ExportFileString("Users_DB",finUserFile);
+                IncrementProgress();
+                countLines = 0;
+                List<string> outComments = new();
+                for (int i = 0; i < disqusDB.posts.Count; i++)
+                {
+                    DiPost post = disqusDB.posts[i];
+                    if(post.isDeleted == "true" && skipDeletedPosts)continue;
+                    
+                    countLines++;
+                    if(countLines > DiDB.tablelineSeparator)
+                    {
+                        countLines = 0;
+                        outComments[outComments.Count-1] = outComments[outComments.Count-1].TrimEnd().TrimEnd(',', ' ')+";";
+                        outComments.Add(DiDB.insertCommentsTableLine);
+                    }
+                    
+                    CommenticsCommentEntry comment = new CommenticsCommentEntry();
+                    comment.Init();
+                    comment.id = i+numOfComments;
+                    comment.is_verified = post.isSpam == "true" ? 0 : 1;
+                    comment.is_approved = comment.is_verified;
+                    comment.is_locked = post.isDeleted == "true" ? 1 : 0;
+                    
+                    int users;
+                    if (usersMap.ContainsKey(post.author))
+                        users = usersMap[post.author];
+                    else
+                        users = usersMap.Count + i;
+
+                    comment.user_id = users+numOfUsers;
+                    if (threadMap.ContainsKey(post.threadId))
+                        comment.page_id = threadMap[post.threadId];
+                    else
+                        comment.page_id = post.threadId.GetHashCode()+i;
+                    comment.comment = post.message.Replace("\'", "&#39;");
+                    comment.date_added = post.createdAt;
+                    comment.date_modified = post.createdAt;
+                    comment.reply_to = commentsMap.ContainsKey(post.parentId)?commentsMap[post.parentId]+numOfComments:0;
+                    outComments.Add(comment.FormatEntry(i == disqusDB.posts.Count - 1));
+                }
+                string finCommentsFile = DiDB.startOfCommentsFile + DiDB.insertCommentsTableLine;
+                foreach (string outComment in outComments)
+                {
+                    finCommentsFile += outComment;
+                }
+                finCommentsFile += DiDB.endOfCommentsFile;
+                ExportFileString("Comments_DB",finCommentsFile);
+                IncrementProgress();
+                return true;
+            }
+
+            return false;
         }
 
+        public void ExportFileString(string filename, string content, string ext = ".sql")
+        {
+            string filepath = Path.GetDirectoryName(pagesLookupFile)+"/"+filename+ext;
+            
+            File.Delete(filepath);
+            File.WriteAllText(filepath, content);
+            gui.Log("Saving '"+filename+ext+"' into output directory");
+        }
+    }
 
-        private string FDate(string inp)
+    public class DiDB
+    {
+        public static DiDB Create(string content)
+        {
+            DiDB newDB = new DiDB();
+            XmlDocument doc = new XmlDocument();
+            doc.LoadXml(content.Replace("dsq:id", "dsq_id"));
+            XmlNodeList categories = doc.GetElementsByTagName("category");
+            foreach (XmlNode category in categories)
+            {
+                DiCategory newCat = new DiCategory();
+                if (category.Attributes != null)
+                    newCat.categoryId = category.Attributes["dsq_id"].Value;
+                newCat.forum = category["forum"]?.InnerText;
+                newCat.title = category["title"]?.InnerText;
+                newCat.isDefault = category["isDefault"]?.InnerText == "true";
+                newDB.categories.Add(newCat);
+            }
+            XmlNodeList threads = doc.GetElementsByTagName("thread");
+            foreach (XmlNode thread in threads)
+            {
+                DiThread newThread = new DiThread();
+                newThread.Init();
+                newThread.author = GrabUser(thread, newDB,true);
+                if (thread.Attributes != null) 
+                    newThread.threadId = thread.Attributes["dsq_id"].Value;
+                newThread.id = thread["id"]?.InnerText;
+                newThread.forum = thread["forum"]?.InnerText;
+                newThread.category = thread["category"]?.InnerText;
+                newThread.link = thread["link"]?.InnerText.Split('&')[0].Split('?')[0].Split('#')[0];
+                newThread.title = thread["title"]?.InnerText;
+                newThread.message = thread["message"]?.InnerText;
+                newThread.createdAt = thread["createdAt"] != null?DiDB.FormatDate(thread["createdAt"].InnerText):DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                newThread.isClosed = thread["isClosed"]?.InnerText;
+                newThread.isDeleted = thread["isDeleted"]?.InnerText;
+                newDB.threads.Add(newThread);
+            }
+            XmlNodeList posts = doc.GetElementsByTagName("post");
+            foreach (XmlNode post in posts)
+            {
+                if(post == null) continue;
+                DiPost newPost = new DiPost();
+                newPost.Init();
+                newPost.author = GrabUser(post, newDB);
+                if (post.Attributes != null) 
+                    newPost.commentId = post.Attributes["dsq_id"].Value;
+                newPost.message = post["message"]?.InnerText.Replace("<![CDATA[", "").Replace("]]>", "");
+                newPost.createdAt = post["createdAt"] != null?DiDB.FormatDate(post["createdAt"].InnerText):DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                newPost.isDeleted = post["isDeleted"]?.InnerText;
+                newPost.isSpam = post["isSpam"]?.InnerText;
+                if(post["thread"] != null)
+                {
+                    newPost.threadId = post["thread"].Attributes["dsq_id"].Value;
+                }
+                if(post["parent"] != null)
+                    newPost.parentId = post["parent"].Attributes["dsq_id"].Value;
+                newDB.posts.Add(newPost);
+            }
+            
+            return newDB;
+        }
+        private static string GrabUser(XmlNode source, DiDB newDB, bool admin = false)
+        {
+            XmlNodeList content = source.SelectNodes("*");
+            XmlNode author = source["author"]; 
+            if (author == null) return "";
+            
+            if(newDB.users.Exists(x => x.username == author["username"]?.InnerText))
+                return author["username"]?.InnerText??"anonymous";
+            
+            DiAuthor newUser = new DiAuthor();
+            newUser.name = author["name"]?.InnerText;
+            newUser.username = author["username"]?.InnerText;
+            newUser.isAnonymous = author["isAnonymous"]?.InnerText == "true";
+            if (newUser.isAnonymous)
+            {
+                newUser.username = "anonymous";
+                newUser.name = "Anonymous";
+            }
+            newUser.isAdmin = admin;
+            newUser.time = source["createdAt"] != null?DiDB.FormatDate(source["createdAt"].InnerText):DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+            newDB.users.Add(newUser);
+            
+            return newUser.username;
+            
+        }
+
+        public List<DiCategory> categories = new List<DiCategory>();
+        public List<DiAuthor> users = new List<DiAuthor>();
+        public List<DiThread> threads = new List<DiThread>();
+        public List<DiPost> posts = new List<DiPost>();
+        public static string FormatDate(string inp)
         {
             string date = inp;
             //2021-08-24T17:34:28Z
@@ -458,33 +493,201 @@ namespace DB_Disqus_convert
             date = date.Replace("T", " ");
             return date;
         }
+        #region SQL file templates
 
-        public void ExportFileString(string filename, string content)
+        public static int tablelineSeparator = 96;
+        public static string startOfCommentsFile = "-- phpMyAdmin SQL Dump\n-- version 5.2.1\n-- https://www.phpmyadmin.net/\n--\n\n--\n-- Dumping data for table `comments`\n--\n\n";
+        public static string insertCommentsTableLine = "\nINSERT INTO `comments` (`id`, `user_id`, `page_id`, `website`, `town`, `state_id`, `country_id`, `rating`, `reply_to`, `headline`, `comment`, `reply`, `ip_address`, `is_approved`, `notes`, `is_admin`, `is_sent`, `sent_to`, `likes`, `dislikes`, `reports`, `is_sticky`, `is_locked`, `is_verified`, `date_modified`, `date_added`) VALUES\n";
+        public static string endOfCommentsFile = "\n--\n-- Indexes for dumped tables\n--\n\n--\n-- Indexes for table `comments`\n--\nALTER TABLE `comments`\n  ADD PRIMARY KEY (`id`);\n\n--\n-- AUTO_INCREMENT for dumped tables\n--\n\n--\n-- AUTO_INCREMENT for table `comments`\n--\nALTER TABLE `comments`\n  MODIFY `id` int UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2871;\nCOMMIT;\n\n/*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;\n/*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;\n/*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;\n";
+        
+        public static string startOfUsersFile = "-- phpMyAdmin SQL Dump\n-- version 5.2.1\n-- https://www.phpmyadmin.net/\n\nSET SQL_MODE = \"NO_AUTO_VALUE_ON_ZERO\";\nSTART TRANSACTION;\nSET time_zone = \"+00:00\";\n\n\n/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;\n/*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;\n/*!40101 SET @OLD_COLLATION_CONNECTION=@@COLLATION_CONNECTION */;\n/*!40101 SET NAMES utf8mb4 */;\n\n--\n-- Dumping data for table `users`\n--\n\n";
+        public static string insertUsersTableLine = "\nINSERT INTO `users` (`id`, `avatar_id`, `avatar_pending_id`, `avatar_selected`, `avatar_login`, `name`, `email`, `moderate`, `token`, `to_all`, `to_admin`, `to_reply`, `to_approve`, `format`, `ip_address`, `date_modified`, `date_added`) VALUES\n";
+        public static string endOfUsersFile = "\n--\n-- Indexes for dumped tables\n--\n\n--\n-- Indexes for table `users`\n--\nALTER TABLE `users`\n  ADD PRIMARY KEY (`id`);\n\n--\n-- AUTO_INCREMENT for dumped tables\n--\n\n--\n-- AUTO_INCREMENT for table `users`\n--\nALTER TABLE `users`\n  MODIFY `id` int UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=272;\nCOMMIT;\n\n/*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;\n/*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;\n/*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;\n";
+    
+
+        #endregion
+    }
+    public struct DiCategory
+    {
+        public string categoryId;
+        public string forum, title;
+        public bool isDefault;
+    }
+    public struct DiAuthor
+    {
+        public string name, username, time;
+        public bool isAnonymous,isAdmin;
+
+        public string FormatEntry(int id,string email="noreply@google.com",bool last = false)
         {
-            string filepath = Path.GetDirectoryName(commentFile)+"/"+filename+".txt";
-            
-            File.Delete(filepath);
-            File.WriteAllText(filepath, content);
-            gui.Log("Saving '"+filename+".sql' into output directory");
+            string result = "("+id+", 0, 0, '', '', '"+name+"', '"+email+"', 'default', '"+Guid.NewGuid()+"', 1, 1, 1, 1, 'html', '127.0.0.1', '"+time+"', '"+time+"')";
+            result += (last?";":",")+Environment.NewLine;
+            return result;
         }
-        public void ExportFile(string filename, List<String> content)
+    }
+    public struct DiThread
+    {
+        public string threadId;
+        public string id;
+        public string forum;
+        public string category;
+        public string link;
+        public string title;
+        public string message;
+        public string createdAt;
+        public string author;
+        public string isClosed;
+        public string isDeleted;
+        public void Init()
         {
-            string filepath = commentFile+"/"+filename+".sql";
-            string outputString = " ";
-            for (int i = 0; i < content.Count; i++)
-            {
-                string cont = content[i];
-                if (i == content.Count-1)
-                {
-                    cont = cont.Replace("'),", "');");
-                }
+            threadId = string.Empty;
+            id = string.Empty;
+            forum = string.Empty;
+            category = string.Empty;
+            link = string.Empty;
+            title = string.Empty;
+            message = string.Empty;
+            createdAt = string.Empty;
+            author = string.Empty;
+            isClosed = string.Empty;
+            isDeleted = string.Empty;
+        }
+    }
+    public struct DiPost
+    {
+        public string commentId;
+        public string message;
+        public string createdAt;
+        public string isDeleted;
+        public string isSpam;
+        public string author;
+        public string threadId;
+        public string parentId;
 
-                outputString += cont;
-                outputString += Environment.NewLine;
+        public void Init()
+        {
+            commentId = string.Empty;
+            message = string.Empty;
+            createdAt = string.Empty;
+            isDeleted = string.Empty;
+            isSpam = string.Empty;
+            author = "anonimous";
+            threadId = "-1";
+            parentId = "-1";
+        }
+    }
+
+    public struct CommenticsPageEntry
+    {
+        public int id;
+        public int site_id;
+        public string identifier;
+        public string reference;
+        public string url;
+        public string moderate;
+        public int is_form_enabled;
+        public string date_modified;
+        public string date_added;
+        
+        public static bool TryCreateEntry(string sourceLine, out CommenticsPageEntry newItem)
+        {
+            newItem = new();
+            string[] parts = sourceLine.Split(',');
+            for (int i = 0; i < parts.Length; i++)
+            {
+                parts[i]=parts[i].Trim().Trim('\'');
             }
-            File.Delete(filepath);
-            File.WriteAllText(filepath, outputString);
-            gui.Log("Saving '"+filename+".sql' into output directory");
+
+            if(parts.Length < 9) return false;
+            if(int.TryParse(parts[0], out int id))
+                newItem.id = id;
+            if(int.TryParse(parts[1], out int siteid))
+                newItem.site_id = siteid;
+            newItem.identifier = parts[2];
+            newItem.reference = parts[3];
+            newItem.url = parts[4];
+            newItem.moderate = parts[5];
+            if(int.TryParse(parts[6], out int form))
+                newItem.is_form_enabled = form;
+            newItem.date_modified = parts[7];
+            newItem.date_added = parts[8];
+            return true; 
+        }
+    }
+    public struct CommenticsCommentEntry
+    {
+        public int id;
+        public int user_id;
+        public int page_id;
+        public string website;
+        public string town;
+        public int state_id;
+        public int country_id;
+        public int rating;
+        public int reply_to;
+        public string headline;
+        public string comment;
+        public string reply;
+        public string ip_address;
+        public int is_approved;
+        public string notes;
+        public int is_admin;
+        public int is_sent;
+        public int sent_to;
+        public int likes;
+        public int dislikes;
+        public int reports;
+        public int is_sticky;
+        public int is_locked;
+        public int is_verified;
+        public string date_modified;
+        public string date_added;
+
+        public void Init()
+        {
+            website = string.Empty;
+            town = string.Empty;
+            headline = string.Empty;
+            comment = string.Empty;
+            reply = string.Empty;
+            ip_address = "127.0.0.1";
+            is_approved = 1;
+            notes = "Transfered from Disqus";
+            is_sent = 1;
+            is_verified = 1;
+            date_modified = string.Empty;
+            date_added = string.Empty;
+        }
+        public string FormatEntry(bool last = false)
+        {
+            string result = "(";
+            result += id.ToString() + ", ";
+            result += user_id.ToString() + ", ";
+            result += page_id.ToString() + ", ";
+            result += "'" + website + "', ";
+            result += "'" + town + "', ";
+            result += state_id.ToString() + ", ";
+            result += country_id.ToString() + ", ";
+            result += rating.ToString() + ", ";
+            result += reply_to.ToString() + ", ";
+            result += "'" + headline + "', ";
+            result += "'" + comment + "', ";
+            result += "'" + reply + "', ";
+            result += "'" + ip_address + "', ";
+            result += is_approved.ToString() + ", ";
+            result += "'" + notes + "', ";
+            result += is_admin.ToString() + ", ";
+            result += is_sent.ToString() + ", ";
+            result += sent_to.ToString() + ", ";
+            result += likes.ToString() + ", ";
+            result += dislikes.ToString() + ", ";
+            result += reports.ToString() + ", ";
+            result += is_sticky.ToString() + ", ";
+            result += is_locked.ToString() + ", ";
+            result += is_verified.ToString() + ", ";
+            result += "'" + date_modified + "', ";
+            result += "'" + date_added + "')"+(last?";":",")+Environment.NewLine;
+            return result;
         }
     }
 }
