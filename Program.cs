@@ -270,7 +270,7 @@ namespace DB_Disqus_convert
                         foreach (CommenticsPageEntry pageEntry in pageDb)
                         {
                             if(!threadMap.ContainsKey(diThread.threadId))
-                                if (diThread.link == pageEntry.url)
+                                if (pageEntry.url != null && diThread.link != null && pageEntry.url.Contains(diThread.link))
                                 {
                                     threadMap.Add(diThread.threadId, int.Parse(pageEntry.identifier));
                                     found = true;
@@ -422,7 +422,7 @@ namespace DB_Disqus_convert
                 newThread.id = thread["id"]?.InnerText;
                 newThread.forum = thread["forum"]?.InnerText;
                 newThread.category = thread["category"]?.InnerText;
-                newThread.link = thread["link"]?.InnerText.Split('&')[0].Split('?')[0].Split('#')[0];
+                newThread.link = thread["link"]?.InnerText.Split('&')[0].Split('?')[0].Split('#')[0].Replace("http://","").Replace("https://", "").Replace("www.", "");
                 newThread.title = thread["title"]?.InnerText;
                 newThread.message = thread["message"]?.InnerText;
                 newThread.createdAt = thread["createdAt"] != null?DiDB.FormatDate(thread["createdAt"].InnerText):DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
