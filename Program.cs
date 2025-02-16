@@ -520,6 +520,7 @@ namespace DB_Disqus_convert
 
         public string FormatEntry(int id,string email="noreply@google.com",bool last = false)
         {
+            name = name.Replace("\'", "&#39;");
             string result = "("+id+", 0, 0, '', '', '"+name+"', '"+email+"', 'default', '"+Guid.NewGuid()+"', 1, 1, 1, 1, 'html', '127.0.0.1', '"+time+"', '"+time+"')";
             result += (last?";":",")+Environment.NewLine;
             return result;
