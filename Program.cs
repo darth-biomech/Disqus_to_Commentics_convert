@@ -120,41 +120,6 @@ namespace DB_Disqus_convert
             TryGetSettingValue("numOfUsers", ref numOfUsers);
             TryGetSettingValue("skipDeletedPosts", ref skipDeletedPosts);
         }
- 
-        private void TryGetSettingValue(string key, ref int var)
-        {
-            if (!_settingsIni.KeyExists(key, "TransferSettings"))
-            {
-                _settingsIni.Write(key, var.ToString(), "TransferSettings");
-            }
-            else
-            {
-                var = Int32.Parse(_settingsIni.Read(key, "TransferSettings"));
-            }
-        }
-        private void TryGetSettingValue(string key, ref bool var)
-        {
-            if (!_settingsIni.KeyExists(key, "TransferSettings"))
-            {
-                _settingsIni.Write(key, var.ToString(), "TransferSettings");
-            }
-            else
-            {
-                var = _settingsIni.Read(key, "TransferSettings").ToLower() == "true";
-            }
-        }
-        private void TryGetSettingValue(string key, ref string var)
-        {
-            if (!_settingsIni.KeyExists(key, "TransferSettings"))
-            {
-                _settingsIni.Write(key, var, "TransferSettings");
-            }
-            else
-            {
-                var = _settingsIni.Read(key, "TransferSettings");
-            }
-        }
-        
         public Dictionary<string, int> threadMap = new Dictionary<string, int>(); // discus ID vs commentics ID
         public Dictionary<string, int> usersMap = new Dictionary<string, int>(); // discus name vs commentics ID
         public Dictionary<string, int> commentsMap = new Dictionary<string, int>(); // discus ID vs commentics ID
